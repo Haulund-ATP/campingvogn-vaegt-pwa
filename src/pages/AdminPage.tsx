@@ -1,8 +1,9 @@
 import { useEffect, useState, type FormEvent } from "react";
 import QRCode from "qrcode";
 import { api } from "../lib/apiClient";
-import { formatKg } from "../components/StatusCard";
-import type { TripSummaryResponse } from "../types";
+import { formatKg } from "../lib/format";
+import { WeightSummary } from "../components/WeightSummary";
+import type { TripSummaryResponse, WeightStatus } from "../types";
 
 interface CreateResult {
   tripId: string;
@@ -10,6 +11,7 @@ interface CreateResult {
   publicToken: string;
   addWeightUrl: string;
   removeWeightUrl: string;
+  status: WeightStatus;
 }
 
 export function AdminPage({ onLogout }: { onLogout: () => void }) {
@@ -77,13 +79,12 @@ export function AdminPage({ onLogout }: { onLogout: () => void }) {
       <ul className="trip-list">
         {visibleTrips.map((trip) => (
           <li key={trip.tripId} className={`trip-row status-${trip.statusLevel}`}>
-            <div>
+            <div className="trip-row-main">
               <strong>{trip.displayName}</strong> <span className="muted">({trip.tripId})</span>
-              <p>
-                {formatKg(trip.currentWeightKg)} / {formatKg(trip.maximumWeightKg)} kg
-                {trip.isOverweight && <span className="overweight-warning"> — {formatKg(trip.overweightKg)} kg for tung</span>}
+              <WeightSummary figures={trip} compact />
+              <p className="muted">
+                {trip.entryCount} registreringer · {trip.isActive ? "Aktiv" : "Arkiveret"}
               </p>
-              <p className="muted">{trip.entryCount} registreringer · {trip.isActive ? "Aktiv" : "Arkiveret"}</p>
             </div>
             <div className="row-actions">
               {trip.isActive ? (
@@ -197,7 +198,8 @@ function NewTripForm({
         </label>
         {startWeightKg && maximumWeightKg && (
           <p className="muted">
-            Oprindelig lasteevne: {(Number(maximumWeightKg.replace(",", ".")) - Number(startWeightKg.replace(",", "."))).toFixed(1)} kg
+            Oprindelig lasteevne:{" "}
+            {formatKg(Number(maximumWeightKg.replace(",", ".")) - Number(startWeightKg.replace(",", ".")))} kg
           </p>
         )}
         {error && <p className="field-error">{error}</p>}
@@ -222,6 +224,7 @@ function TripQrResult({ result, onDone }: { result: CreateResult; onDone: () => 
   return (
     <div className="screen">
       <h1>{result.displayName}</h1>
+      <WeightSummary figures={result.status} />
       <p className="muted">
         Gem eller udskriv QR-koderne nu — det klare token vises ikke igen. Hvis de mistes, skal tokenet roteres.
       </p>

@@ -18,7 +18,11 @@ param(
     [string]$ContainerAppName = "campingvogn-vaegt-pwa",
     [string]$ImageName = "ghcr.io/REPLACE_WITH_GITHUB_OWNER/campingvogn-vaegt-pwa:latest",
     [Parameter(Mandatory = $true)] [string]$SharePointSiteUrl,
-    [string]$PublicAppUrl = "https://c.h-aa.dk"
+    [string]$PublicAppUrl = "https://c.h-aa.dk",
+    # Hvor længe replicaen holdes i live efter sidste request, før den skaleres til nul.
+    # Default 3600 s (maksimum) — så er der ingen cold start under en pakkedag, men
+    # stadig nul forbrug, når vognen ikke bruges. Azures egen default er 300 s.
+    [ValidateRange(60, 3600)] [int]$CooldownPeriodSeconds = 3600
 )
 
 $ErrorActionPreference = "Stop"
@@ -29,6 +33,7 @@ az provider register --namespace Microsoft.OperationalInsights --wait 2>$null | 
 
 Write-Host "Forventet driftsomkostning:"
 Write-Host "  Container Apps Consumption (scale-to-zero, min=0):  0 kr. i hvile, ganske få øre/CPU-sekund ved aktiv trafik"
+Write-Host "  Cooldown $CooldownPeriodSeconds s efter sidste request:            holder appen varm under brug, stadig 0 kr. i hvile"
 Write-Host "  Managed TLS-certifikat:                              0 kr."
 Write-Host "  Logs destination 'none':                             0 kr. (ingen Log Analytics-ressource)"
 Write-Host "  Samlet forventet drift ved normal privat brug:       ~0 kr.`n"
@@ -116,6 +121,20 @@ if (-not $existingApp) {
     Write-Host "Container App oprettet." -ForegroundColor Green
 } else {
     Write-Host "Container App '$ContainerAppName' findes allerede — secrets/peppers bevares uændret." -ForegroundColor Yellow
+}
+
+# Cooldown sættes både ved oprettelse og ved gentagne kørsler, så en ændret værdi slår igennem.
+Write-Host "`nSætter cooldown-periode til $CooldownPeriodSeconds sekunder (tid uden trafik før scale-to-zero)..."
+$cooldownResult = az containerapp update `
+    --name $ContainerAppName `
+    --resource-group $ResourceGroup `
+    --cooldown-period $CooldownPeriodSeconds 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Kunne ikke sætte cooldown-perioden — kræver en nyere containerapp-extension." -ForegroundColor Yellow
+    Write-Host "  Appen kører videre med Azures default på 300 sekunder. Detaljer: $cooldownResult" -ForegroundColor Yellow
+    $global:LASTEXITCODE = 0
+} else {
+    Write-Host "Cooldown-periode sat." -ForegroundColor Green
 }
 
 $principalId = az containerapp show --name $ContainerAppName --resource-group $ResourceGroup --query "identity.principalId" -o tsv

@@ -1,10 +1,13 @@
-import { useEffect, useState, type FormEvent } from "react";
-import { api, ApiError } from "../lib/apiClient";
-import { enqueue } from "../lib/offlineQueue";
-import { syncQueueForTrip } from "../lib/sync";
-import { StatusCard, formatKg } from "../components/StatusCard";
-import type { EntryCategory } from "../types";
-import type { StatusResponse } from "../types";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { ApiError, api } from "../lib/apiClient";
+import { enqueue, pendingDeltaKg } from "../lib/offlineQueue";
+import { requestQueueSync } from "../lib/serviceWorker";
+import { loadStatusSnapshot, projectStatus, saveStatusSnapshot } from "../lib/statusCache";
+import { onSynced, syncQueue } from "../lib/sync";
+import { WeightSummary } from "../components/WeightSummary";
+import { formatKg } from "../lib/format";
+import { parseUserWeightKg } from "../shared/weight";
+import type { EntryCategory, StatusResponse } from "../types";
 
 const CATEGORIES: EntryCategory[] = [
   "Campingudstyr",
@@ -18,32 +21,19 @@ const CATEGORIES: EntryCategory[] = [
   "Andet",
 ];
 
-function newEntryId(): string {
-  return crypto.randomUUID();
-}
-
-function parseWeightInput(input: string): number {
-  const normalized = input.trim().replace(",", ".");
-  if (!/^\d+(\.\d{1,3})?$/.test(normalized)) throw new Error("Ugyldigt vægtformat");
-  const value = Number(normalized);
-  if (!Number.isFinite(value) || value <= 0) throw new Error("Vægten skal være et positivt tal");
-  return value;
-}
-
 interface Props {
   tripId: string;
   action: "add" | "remove";
   onDone: () => void;
+  onSessionLost: () => void;
 }
 
-type ResultState =
-  | { kind: "server"; status: StatusResponse; weightKg: number }
-  | { kind: "pending"; estimate: string; weightKg: number }
-  | null;
+type ResultState = { synced: boolean; weightKg: number } | null;
 
-export function WeightEntryPage({ tripId, action, onDone }: Props) {
-  const [displayName, setDisplayName] = useState<string>("");
+export function WeightEntryPage({ tripId, action, onDone, onSessionLost }: Props) {
   const [status, setStatus] = useState<StatusResponse | null>(null);
+  const [cachedAt, setCachedAt] = useState<string | null>(null);
+  const [pending, setPending] = useState<number[]>([]);
   const [weightInput, setWeightInput] = useState("");
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState<EntryCategory>("Andet");
@@ -52,26 +42,44 @@ export function WeightEntryPage({ tripId, action, onDone }: Props) {
   const [result, setResult] = useState<ResultState>(null);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    void loadStatus();
+  const refreshPending = useCallback(async () => {
+    setPending(await pendingDeltaKg(tripId));
   }, [tripId]);
 
-  async function loadStatus() {
-    try {
-      const s = await api.get<StatusResponse>("/status");
-      setStatus(s);
-      setDisplayName(s.displayName);
-    } catch {
-      // Kan ske offline; formularen virker stadig med lokalt estimat.
+  const loadStatus = useCallback(async () => {
+    // Det lokale snapshot vises først, så den frie vægt står der med det samme —
+    // også mens containeren vågner, og selv helt uden forbindelse.
+    const snapshot = await loadStatusSnapshot(tripId);
+    if (snapshot) {
+      setStatus(snapshot);
+      setCachedAt(snapshot.cachedAt);
     }
-  }
+    await refreshPending();
+
+    try {
+      const fresh = await api.get<StatusResponse>("/status", { retry: true });
+      await saveStatusSnapshot(fresh);
+      setStatus(fresh);
+      setCachedAt(null);
+    } catch (err) {
+      if (err instanceof ApiError && err.isSessionLost) onSessionLost();
+      // Offline eller serverfejl: snapshottet ovenfor bliver stående.
+    }
+  }, [tripId, refreshPending, onSessionLost]);
+
+  useEffect(() => {
+    void loadStatus();
+    // Når køen bliver sendt (også fra service workeren), skal tallene opdateres.
+    return onSynced(() => void loadStatus());
+  }, [loadStatus]);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     setError(null);
+
     let weightKg: number;
     try {
-      weightKg = parseWeightInput(weightInput);
+      weightKg = parseUserWeightKg(weightInput);
     } catch (err) {
       setError((err as Error).message);
       return;
@@ -82,66 +90,69 @@ export function WeightEntryPage({ tripId, action, onDone }: Props) {
     }
 
     setBusy(true);
-    const entryId = newEntryId();
+    const entryId = crypto.randomUUID();
     const occurredAt = new Date().toISOString();
     const clientTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const payload = {
+      entryId,
+      action,
+      description,
+      weightKg,
+      category,
+      notes: notes || undefined,
+      occurredAt,
+      clientTimeZone,
+    };
 
     try {
-      const response = await api.post<{ status: StatusResponse }>("/entries", {
-        entryId,
-        action,
-        description,
-        weightKg,
-        category,
-        notes: notes || undefined,
-        occurredAt,
-        clientTimeZone,
-      });
-      setResult({ kind: "server", status: response.status, weightKg });
+      const response = await api.post<{ status: StatusResponse }>("/entries", payload, { retry: true });
+      await saveStatusSnapshot(response.status);
       setStatus(response.status);
-      void syncQueueForTrip(tripId);
+      setCachedAt(null);
+      setResult({ synced: true, weightKg });
+      void syncQueue(tripId).then(refreshPending);
     } catch (err) {
-      await enqueue({
-        entryId,
-        tripId,
-        action,
-        description,
-        weightKg,
-        category,
-        notes: notes || undefined,
-        occurredAt,
-        clientTimeZone,
-        createdAt: occurredAt,
-        attempts: 0,
-      });
-      const estimate = status ? estimateAfter(status, action, weightKg) : "ukendt (ingen tidligere status tilgængelig)";
-      setResult({ kind: "pending", estimate, weightKg });
-      if (err instanceof ApiError && err.status >= 500) {
-        // server error, køen prøver igen senere
+      if (err instanceof ApiError && !err.isRetryableLater && !err.isSessionLost) {
+        // Serveren har afvist posten (fx for tung eller arkiveret trip) — den
+        // skal ikke i køen, for svaret bliver det samme næste gang.
+        setError(err.detail ?? err.title);
+        setBusy(false);
+        return;
       }
+
+      await enqueue({ ...payload, tripId, createdAt: occurredAt, attempts: 0 });
+      await refreshPending();
+      await requestQueueSync().catch(() => undefined);
+      setResult({ synced: false, weightKg });
+
+      if (err instanceof ApiError && err.isSessionLost) onSessionLost();
     } finally {
       setBusy(false);
     }
   }
 
+  const figures = status ? projectStatus(status, pending) : null;
+
   if (result) {
     return (
       <div className="screen">
         <h1>{action === "add" ? "Tilføj vægt" : "Fjern vægt"}</h1>
-        {result.kind === "server" ? (
-          <>
-            <p className="result-headline">Registreringen er gemt</p>
-            <StatusCard status={result.status} />
-          </>
-        ) : (
-          <>
-            <p className="result-headline">Registreringen venter på synkronisering</p>
-            <p>Foreløbigt estimat: {result.estimate}</p>
-            <p className="muted">Andre telefoner kan have foretaget registreringer i mellemtiden.</p>
-          </>
+        <p className="result-headline">
+          {result.synced
+            ? `${formatKg(result.weightKg)} kg er registreret`
+            : `${formatKg(result.weightKg)} kg er gemt og sendes automatisk`}
+        </p>
+        {status && <h2>{status.displayName}</h2>}
+        {figures && <WeightSummary figures={figures} pendingCount={pending.length} cachedAt={cachedAt} />}
+        {!result.synced && (
+          <p className="muted">
+            Registreringen ligger på telefonen, indtil der er forbindelse. Andre telefoner kan have registreret
+            i mellemtiden.
+          </p>
         )}
         <div className="actions">
           <button
+            className="primary"
             onClick={() => {
               setResult(null);
               setWeightInput("");
@@ -160,14 +171,11 @@ export function WeightEntryPage({ tripId, action, onDone }: Props) {
   return (
     <div className="screen">
       <h1>{action === "add" ? "Tilføj vægt" : "Fjern vægt"}</h1>
-      {displayName && <p className="trip-name">{displayName}</p>}
-      {status && (
-        <p className="muted">
-          Aktuel vægt: {formatKg(status.currentWeightKg)} kg —{" "}
-          {status.isOverweight
-            ? `${formatKg(status.overweightKg)} kg for tung`
-            : `${formatKg(status.remainingWeightKg)} kg resterende lasteevne`}
-        </p>
+      {status && <p className="trip-name">{status.displayName}</p>}
+      {figures ? (
+        <WeightSummary figures={figures} pendingCount={pending.length} cachedAt={cachedAt} />
+      ) : (
+        <p className="muted">Henter aktuel vægt…</p>
       )}
       <form onSubmit={submit}>
         <label>
@@ -199,6 +207,7 @@ export function WeightEntryPage({ tripId, action, onDone }: Props) {
           Note (valgfri)
           <textarea value={notes} onChange={(e) => setNotes(e.target.value)} />
         </label>
+        {weightInput && figures && <PreviewLine figures={figures} action={action} input={weightInput} />}
         {error && <p className="field-error">{error}</p>}
         <button type="submit" disabled={busy}>
           {busy ? "Gemmer…" : "Registrer"}
@@ -208,10 +217,29 @@ export function WeightEntryPage({ tripId, action, onDone }: Props) {
   );
 }
 
-function estimateAfter(status: StatusResponse, action: "add" | "remove", weightKg: number): string {
-  const delta = action === "add" ? weightKg : -weightKg;
-  const newCurrent = status.currentWeightKg + delta;
-  const remaining = status.maximumWeightKg - newCurrent;
-  if (remaining < 0) return `Campingvognen vil være cirka ${formatKg(Math.abs(remaining))} kg for tung`;
-  return `Du kan tilføje yderligere ${formatKg(remaining)} kg`;
+/** Viser hvad den frie vægt bliver, før man trykker registrer. */
+function PreviewLine({
+  figures,
+  action,
+  input,
+}: {
+  figures: StatusResponse;
+  action: "add" | "remove";
+  input: string;
+}) {
+  let weightKg: number;
+  try {
+    weightKg = parseUserWeightKg(input);
+  } catch {
+    return null;
+  }
+
+  const after = projectStatus(figures, [action === "add" ? weightKg : -weightKg]);
+  return (
+    <p className={after.isOverweight ? "field-error" : "muted"}>
+      {after.isOverweight
+        ? `Efter denne registrering: ${formatKg(after.overweightKg)} kg for tung`
+        : `Efter denne registrering: ${formatKg(after.remainingWeightKg)} kg fri vægt tilbage`}
+    </p>
+  );
 }

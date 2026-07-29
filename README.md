@@ -93,6 +93,9 @@ Se [SECURITY.md](SECURITY.md) og [docs/security.md](docs/security.md).
 ## Fejlsøgning
 
 - **401 fra `/api/status`**: ingen gyldig session — scan en QR-kode igen.
+- **Første load tager lang tid**: containeren kører scale-to-zero og skal vækkes. Appen viser
+  "Serveren starter op…" og prøver selv igen — QR-koden skal ikke scannes to gange. Se
+  [docs/operations.md](docs/operations.md) hvis opstartstiden skal skrues yderligere ned.
 - **QR-kode virker ikke**: trippet kan være arkiveret, eller tokenet er roteret. Generér en ny QR-kode.
 - **Container App starter ikke**: tjek `az containerapp logs show --name campingvogn-vaegt-pwa --resource-group rg-campingvogn-vaegt-pwa` for manglende application settings.
 - Se [docs/operations.md](docs/operations.md) for flere scenarier.

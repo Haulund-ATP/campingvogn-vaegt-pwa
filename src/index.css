@@ -210,3 +210,156 @@ button[type="submit"] {
 .trip-name {
   font-weight: 600;
 }
+
+.trip-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+/* Opstart */
+
+.boot-screen {
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  text-align: center;
+}
+
+.spinner {
+  width: 34px;
+  height: 34px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 900ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 3s;
+  }
+}
+
+/* Bannere */
+
+.banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.banner button {
+  min-height: 36px;
+  padding: 6px 12px;
+  font-size: 15px;
+}
+
+.banner-offline {
+  background: color-mix(in srgb, var(--yellow) 20%, var(--bg));
+}
+
+.banner-update {
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg));
+}
+
+/* Fri vægt */
+
+.weight-summary {
+  border: 2px solid var(--border);
+  border-radius: 14px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.weight-summary.compact {
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  gap: 6px;
+}
+
+.weight-summary-headline {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.weight-summary-value {
+  font-size: 34px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.weight-summary.compact .weight-summary-value {
+  font-size: 22px;
+}
+
+.weight-summary-label {
+  font-size: 15px;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--text) 70%, transparent);
+}
+
+.weight-summary.status-red .weight-summary-value,
+.weight-summary.status-red .weight-summary-label {
+  color: var(--red);
+}
+
+.weight-summary.status-yellow .weight-summary-value {
+  color: var(--yellow);
+}
+
+.weight-summary-detail {
+  margin: 0;
+}
+
+.weight-summary-note {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--text) 80%, transparent);
+}
+
+.weight-bar {
+  height: 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+  overflow: hidden;
+}
+
+.weight-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 200ms ease-out;
+}
+
+.weight-bar-fill.status-green {
+  background: var(--green);
+}
+.weight-bar-fill.status-yellow {
+  background: var(--yellow);
+}
+.weight-bar-fill.status-red {
+  background: var(--red);
+}
+
+/* StatusCard indeholder nu en WeightSummary og skal ikke have dobbelt ramme. */
+.status-card .weight-summary {
+  border: 0;
+  padding: 0;
+}

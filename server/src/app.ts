@@ -8,6 +8,7 @@ import { entriesRouter } from "./routes/entries.js";
 import { adminTripsRouter } from "./routes/adminTrips.js";
 import { adminSystemRouter } from "./routes/adminSystem.js";
 import { Problems } from "./lib/problemDetails.js";
+import { sessionRenewal } from "./lib/sessionRenewal.js";
 import { send } from "./lib/send.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -26,12 +27,19 @@ export function createApp() {
     res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
     res.setHeader(
       "Content-Security-Policy",
-      "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'"
+      "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; worker-src 'self'; manifest-src 'self'"
     );
     next();
   });
 
   const api = express.Router();
+  // Billigt endpoint uden Graph-kald: bruges til at varme containeren op efter
+  // scale-to-zero og til at se, om enheden reelt har forbindelse.
+  api.get("/health", (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.status(200).json({ ok: true, serverTime: new Date().toISOString() });
+  });
+  api.use(sessionRenewal);
   api.use(sessionsRouter);
   api.use(statusRouter);
   api.use(entriesRouter);
@@ -39,19 +47,21 @@ export function createApp() {
   api.use(adminSystemRouter);
   app.use("/api", api);
 
-  // Statiske assets (aldrig /api/*) med langtidscache; index.html cached ikke.
+  // Statiske assets (aldrig /api/*). Kun de indholdshashede filer under /assets/
+  // må langtidscaches — sw.js, manifest og index.html skal kunne revalideres, ellers
+  // kan en gammel service worker låse brugeren fast på en forældet version.
   app.use(
     express.static(staticDir, {
       index: false,
       setHeaders: (res, filePath) => {
-        if (!filePath.endsWith("index.html")) {
-          res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-        }
+        const isHashedAsset = filePath.includes(`${path.sep}assets${path.sep}`);
+        res.setHeader("Cache-Control", isHashedAsset ? "public, max-age=31536000, immutable" : "no-cache");
       },
     })
   );
 
   app.get(/^(?!\/api).*/, (_req, res) => {
+    res.setHeader("Cache-Control", "no-cache");
     res.sendFile(path.join(staticDir, "index.html"));
   });
 

@@ -8,7 +8,14 @@
     <title>Campingvogn Vægt</title>
   </head>
   <body>
-    <div id="root"></div>
+    <!-- Skeletten står i HTML'en, så der er noget på skærmen med det samme.
+         React erstatter den, så snart appen er indlæst. -->
+    <div id="root">
+      <div class="screen boot-screen">
+        <div class="spinner"></div>
+        <p>Åbner…</p>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -7,11 +7,23 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: 'autoUpdate',
-      workbox: {
-        // /api/* skal aldrig caches: tokens, sessions, historik og adminsvar.
-        navigateFallbackDenylist: [/^\/api\//],
-        runtimeCaching: [],
+      // Egen service worker (src/sw.ts): app-shellen skal serveres cache-first,
+      // så appen starter med det samme selv når containeren er skaleret til nul,
+      // og køen skal kunne sendes via Background Sync.
+      strategies: 'injectManifest',
+      srcDir: 'src',
+      filename: 'sw.ts',
+      // Registreringen sker eksplicit i src/lib/serviceWorker.ts. Pluginets
+      // automatiske injektion er inline-script, som blokeres af vores CSP.
+      injectRegister: null,
+      registerType: 'prompt',
+      injectManifest: {
+        // Klassisk script, ikke ES-modul: modul-service-workers understøttes
+        // ikke i alle browsere, og vi har ingen brug for import på runtime.
+        rollupFormat: 'iife',
+        globPatterns: ['**/*.{js,css,html,svg,png,ico,webmanifest}'],
+        // /api/* er aldrig en del af precachen: tokens, sessioner og historik.
+        globIgnores: ['**/node_modules/**/*', 'sw.js'],
       },
       manifest: {
         name: 'Campingvogn Vægt',

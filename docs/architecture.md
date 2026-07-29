@@ -26,11 +26,17 @@
 ## Komponenter
 
 - **Frontend** (`src/`): React 19 + TypeScript + Vite. Hash-baseret routing læser
-  `#action=…&trip=…&token=…` fra QR-koder, udveksler tokenet til en session, og fjerner
-  fragmentet fra adresselinjen. Offlinekø i IndexedDB (`src/lib/offlineQueue.ts`).
+  `#action=…&trip=…&token=…` fra QR-koder, udveksler tokenet til en session, og fjerner først
+  fragmentet fra adresselinjen når sessionen står. Offlinekø i IndexedDB
+  (`src/lib/offlineQueue.ts`).
+- **Service worker** (`src/sw.ts`): egen service worker (ingen Workbox-runtime), bygget med
+  `vite-plugin-pwa` i `injectManifest`-tilstand. Serverer app-shellen cache-first, så appen starter
+  øjeblikkeligt selv når containeren er skaleret til nul, og sender offlinekøen via Background Sync.
+  `/api/*` caches aldrig. Se [offline.md](offline.md).
 - **Server** (`server/`): almindelig Node/Express-server (ikke Azure Functions), der både serverer
   de byggede statiske frontend-filer og API'et under `/api/*`. Al vægtberegning sker autoritativt
-  på serveren (`server/src/shared/weight.ts`), i heltal gram.
+  på serveren (`server/src/shared/weight.ts`), i heltal gram. `GET /api/health` er et billigt
+  endpoint uden Graph-kald; `POST /api/session/heartbeat` forlænger en aktiv session.
 - **Data** (SharePoint): tre lister, ingen pr.-trip-lister eller -ressourcer. Se
   [sharepoint.md](sharepoint.md).
 - **Identitet**: Container Appens system-assigned Managed Identity bruges direkte til Microsoft
@@ -43,7 +49,9 @@
 ## Hvorfor denne stack
 
 - Container Apps Consumption med `scale-to-zero` (min replicas 0) giver tæt på 0 kr. i drift ved
-  privat brug, samtidig med bred EU-regionsdækning.
+  privat brug, samtidig med bred EU-regionsdækning. Prisen er en cold start på det første kald,
+  som håndteres af cache-first-shellen, gentagelseslogikken i `src/lib/apiClient.ts` og en
+  cooldown-periode på 3600 s.
 - SharePoint-lister genbruger eksisterende Microsoft 365-licens i stedet for en betalt database.
 - Ingen pr.-trip-ressourcer: nye trips er blot nye rækker i `CampingvognVaegtTrips`.
 - Managed Identity fjerner client secret-håndtering og -rotation som et sikkerhedsproblem helt.

@@ -42,9 +42,10 @@ function pruneExpired(windowMs: number): void {
 }
 
 export const RATE_LIMITS = {
-  publicTokenExchange: { maxAttempts: 5, windowMs: 5 * 60 * 1000 },
-  adminTokenExchange: { maxAttempts: 3, windowMs: 10 * 60 * 1000 },
-  entriesPerTrip: { maxAttempts: 20, windowMs: 10 * 60 * 1000 },
+  publicTokenExchange: { maxAttempts: 10, windowMs: 5 * 60 * 1000 },
+  adminTokenExchange: { maxAttempts: 5, windowMs: 10 * 60 * 1000 },
+  // Højt nok til at en offlinekø kan tømmes i én byge uden at ramme loftet.
+  entriesPerTrip: { maxAttempts: 60, windowMs: 10 * 60 * 1000 },
 } as const;
 
 export function isRateLimited(
@@ -53,6 +54,22 @@ export function isRateLimited(
 ): boolean {
   const { maxAttempts, windowMs } = RATE_LIMITS[scope];
   return !checkAndIncrement(`${scope}:${identifier}`, maxAttempts, windowMs);
+}
+
+// Ren kontrol uden at tælle op. Bruges til tokenudveksling, hvor kun mislykkede
+// forsøg skal koste: et gyldigt QR-scan må gentages frit (fx efter cold start),
+// mens gæt fortsat bremses efter få fejl.
+export function isBlocked(scope: keyof typeof RATE_LIMITS, identifier: string): boolean {
+  const { maxAttempts, windowMs } = RATE_LIMITS[scope];
+  const bucket = buckets.get(`${scope}:${identifier}`);
+  if (!bucket) return false;
+  if (Date.now() - bucket.windowStart > windowMs) return false;
+  return bucket.count >= maxAttempts;
+}
+
+export function recordFailedAttempt(scope: keyof typeof RATE_LIMITS, identifier: string): void {
+  const { maxAttempts, windowMs } = RATE_LIMITS[scope];
+  checkAndIncrement(`${scope}:${identifier}`, maxAttempts, windowMs);
 }
 
 export function hashClientIdentifier(ip: string, pepper: string): string {

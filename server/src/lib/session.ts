@@ -18,8 +18,13 @@ export interface AdminSessionPayload {
 
 export type SessionPayload = PublicSessionPayload | AdminSessionPayload;
 
-const PUBLIC_SESSION_TTL_SECONDS = 60 * 60 * 4; // 4 timer
-const ADMIN_SESSION_TTL_SECONDS = 60 * 30; // 30 minutter
+const PUBLIC_SESSION_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 dage — dækker en hel ferie
+const ADMIN_SESSION_TTL_SECONDS = 60 * 60 * 8; // 8 timer
+
+// Glidende fornyelse: sessionen genudstedes, når mindre end denne andel af TTL'en
+// er tilbage. Det holder aktive brugere logget ind uden at gøre et lækket
+// sessionscookie evigt gyldigt — en ubrugt session udløber fortsat efter TTL.
+const RENEWAL_THRESHOLD = 0.5;
 
 function sign(payloadB64: string, secret: string): string {
   return createHmac("sha256", secret).update(payloadB64, "utf8").digest("base64url");
@@ -51,6 +56,29 @@ export function issueAdminSession(
     expiresAt: Date.now() + ADMIN_SESSION_TTL_SECONDS * 1000,
   };
   return { token: encode(payload, secret), payload };
+}
+
+export function sessionTtlSeconds(payload: SessionPayload): number {
+  return payload.role === "public" ? PUBLIC_SESSION_TTL_SECONDS : ADMIN_SESSION_TTL_SECONDS;
+}
+
+// Sand når sessionen er over halvvejs gennem sin levetid og derfor bør genudstedes.
+export function shouldRenewSession(payload: SessionPayload, now = Date.now()): boolean {
+  const ttlMs = sessionTtlSeconds(payload) * 1000;
+  const remainingMs = payload.expiresAt - now;
+  return remainingMs > 0 && remainingMs < ttlMs * RENEWAL_THRESHOLD;
+}
+
+// Genudsteder samme session (uændret sessionId, rolle og tokenversion) med frisk udløb.
+// SessionId bevares, så revidering via tokenversion og sporing i SharePoint stadig holder.
+export function renewSession(
+  payload: SessionPayload,
+  secret: string,
+  now = Date.now()
+): { token: string; payload: SessionPayload; ttlSeconds: number } {
+  const ttlSeconds = sessionTtlSeconds(payload);
+  const renewed: SessionPayload = { ...payload, expiresAt: now + ttlSeconds * 1000 };
+  return { token: encode(renewed, secret), payload: renewed, ttlSeconds };
 }
 
 function encode(payload: SessionPayload, secret: string): string {

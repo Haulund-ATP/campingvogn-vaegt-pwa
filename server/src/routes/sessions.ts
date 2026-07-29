@@ -1,7 +1,7 @@
 import { Router, type Request } from "express";
 import { loadEnv } from "../lib/env.js";
 import { verifyTokenAgainstHash } from "../lib/crypto.js";
-import { isRateLimited, hashClientIdentifier } from "../lib/rateLimit.js";
+import { isBlocked, recordFailedAttempt, hashClientIdentifier } from "../lib/rateLimit.js";
 import {
   issuePublicSession,
   issueAdminSession,
@@ -9,7 +9,9 @@ import {
   buildLogoutCookie,
   PUBLIC_SESSION_TTL,
   ADMIN_SESSION_TTL,
+  type SessionPayload,
 } from "../lib/session.js";
+import { getSessionFromRequest, isPublicSession } from "../lib/auth.js";
 import { buildCsrfCookie, generateCsrfToken } from "../lib/csrf.js";
 import { Problems } from "../lib/problemDetails.js";
 import { isValidTripId } from "../lib/validation.js";
@@ -28,25 +30,29 @@ sessionsRouter.post("/session/exchange", async (req, res) => {
   const env = loadEnv();
   const clientId = clientIdentifier(req, env.rateLimitPepper);
 
-  if (isRateLimited("publicTokenExchange", clientId)) {
+  if (isBlocked("publicTokenExchange", clientId)) {
     return send(res, Problems.tooManyRequests("For mange forsøg på token-udveksling. Prøv igen senere."));
   }
 
   const body = req.body as { tripId?: string; token?: string };
   if (!body.tripId || !isValidTripId(body.tripId) || !body.token) {
+    recordFailedAttempt("publicTokenExchange", clientId);
     return send(res, Problems.badRequest("TripId eller token mangler eller er ugyldigt"));
   }
 
   const trip = await findTripById(env, body.tripId);
   if (!trip || !trip.isActive) {
+    recordFailedAttempt("publicTokenExchange", clientId);
     return send(res, Problems.unauthorized("Ugyldigt trip eller token"));
   }
 
   if (trip.publicTokenExpires && new Date(trip.publicTokenExpires) < new Date()) {
+    recordFailedAttempt("publicTokenExchange", clientId);
     return send(res, Problems.unauthorized("Token er udløbet"));
   }
 
   if (!verifyTokenAgainstHash(body.token, trip.publicTokenHash, env.tokenHashPepper)) {
+    recordFailedAttempt("publicTokenExchange", clientId);
     return send(res, Problems.unauthorized("Ugyldigt trip eller token"));
   }
 
@@ -66,12 +72,13 @@ sessionsRouter.post("/session/admin/exchange", async (req, res) => {
   const env = loadEnv();
   const clientId = clientIdentifier(req, env.rateLimitPepper);
 
-  if (isRateLimited("adminTokenExchange", clientId)) {
+  if (isBlocked("adminTokenExchange", clientId)) {
     return send(res, Problems.tooManyRequests("For mange forsøg på administrator-login. Prøv igen senere."));
   }
 
   const body = req.body as { token?: string };
   if (!body.token) {
+    recordFailedAttempt("adminTokenExchange", clientId);
     return send(res, Problems.badRequest("Token mangler"));
   }
 
@@ -81,10 +88,12 @@ sessionsRouter.post("/session/admin/exchange", async (req, res) => {
   }
 
   if (system.fields.GlobalAdminTokenExpires && new Date(system.fields.GlobalAdminTokenExpires) < new Date()) {
+    recordFailedAttempt("adminTokenExchange", clientId);
     return send(res, Problems.unauthorized("Administratortoken er udløbet"));
   }
 
   if (!verifyTokenAgainstHash(body.token, system.fields.GlobalAdminTokenHash, env.tokenHashPepper)) {
+    recordFailedAttempt("adminTokenExchange", clientId);
     return send(res, Problems.unauthorized("Ugyldigt administratortoken"));
   }
 
@@ -96,6 +105,28 @@ sessionsRouter.post("/session/admin/exchange", async (req, res) => {
     jsonBody: { role: "system-admin" },
     headers: {
       "set-cookie": [buildSessionCookie(sessionToken, ADMIN_SESSION_TTL), buildCsrfCookie(csrfToken, ADMIN_SESSION_TTL)],
+    },
+  });
+});
+
+// Heartbeat: appen kalder denne med jævne mellemrum, mens den er åben. Svaret
+// får en fornyet sessionscookie med af sessionRenewal-middlewaren, så aktiv brug
+// holder sessionen i live. Verifikationen er ren HMAC uden Graph-kald, så pinget
+// er billigt — tilbagekaldelse via tokenversion håndhæves fortsat på datakald.
+sessionsRouter.post("/session/heartbeat", (req, res) => {
+  const env = loadEnv();
+  const session = getSessionFromRequest(req, env.sessionSigningSecret);
+  if (!session) return send(res, Problems.unauthorized("Ingen gyldig session"));
+
+  // Er sessionen netop blevet fornyet, er det det nye udløb der gælder.
+  const effective = (res.locals.renewedSession as SessionPayload | undefined) ?? session;
+
+  send(res, {
+    status: 200,
+    jsonBody: {
+      role: effective.role,
+      tripId: isPublicSession(effective) ? effective.tripId : null,
+      expiresAt: new Date(effective.expiresAt).toISOString(),
     },
   });
 });

@@ -1,23 +1,21 @@
+import { formatKg } from "../lib/format";
+import { WeightSummary } from "./WeightSummary";
 import type { StatusResponse } from "../types";
 
-export function StatusCard({ status }: { status: StatusResponse }) {
+export function StatusCard({
+  status,
+  pendingCount = 0,
+  cachedAt,
+}: {
+  status: StatusResponse;
+  pendingCount?: number;
+  cachedAt?: string | null;
+}) {
   return (
-    <div className={`status-card status-${status.statusLevel}`} role="status">
+    <div className={`status-card status-${status.statusLevel}`}>
       <h2>{status.displayName}</h2>
       <p className="current-weight">{formatKg(status.currentWeightKg)} kg</p>
-      <p>Tilladt totalvægt: {formatKg(status.maximumWeightKg)} kg</p>
-      {status.isOverweight ? (
-        <p className="overweight-warning">
-          <span aria-hidden="true">⚠️</span> Campingvognen er {formatKg(status.overweightKg)} kg for tung
-        </p>
-      ) : (
-        <p>Du kan tilføje yderligere {formatKg(status.remainingWeightKg)} kg</p>
-      )}
-      <p className="utilization">{status.utilizationPercentage.toFixed(1)}% udnyttet</p>
+      <WeightSummary figures={status} pendingCount={pendingCount} cachedAt={cachedAt} />
     </div>
   );
-}
-
-export function formatKg(value: number): string {
-  return value.toLocaleString("da-DK", { minimumFractionDigits: 0, maximumFractionDigits: 3 });
 }

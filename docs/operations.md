@@ -8,6 +8,25 @@ logger ind på Azure via OIDC (ingen permanent client secret i GitHub), og opdat
 Appen til det nye image. Pull requests deployer aldrig produktion og har ikke adgang til
 produktions-secrets (workflowet trigges kun af `push: main` og `workflow_dispatch`).
 
+## Opstartstid og scale-to-zero
+
+Appen kører med `min-replicas 0`, så der er ingen udgift i hvile. Til gengæld skal replicaen vækkes
+på det første kald efter en pause.
+
+- **Cooldown-perioden** styrer hvor længe replicaen holdes i live efter sidste request. Azures
+  default er 300 s; `provision-azure.ps1` sætter den til 3600 s (maksimum), så der ikke opstår cold
+  start under en pakkesession. Kan ændres uden at genprovisionere:
+
+  ```
+  az containerapp update --name campingvogn-vaegt-pwa --resource-group rg-campingvogn-vaegt-pwa --cooldown-period 3600
+  ```
+
+  Kræver en nogenlunde ny `containerapp`-extension (`az extension add --name containerapp --upgrade`).
+  Kan den ikke sættes, kører appen videre på Azures default på 300 s.
+- **Vil du fjerne cold start helt**, sæt `--min-replicas 1`. Så kører der én replica hele tiden, og
+  forbruget er ikke længere ~0 kr. Der er ikke behov for det til den nuværende brug — cache-first
+  app-shellen og gentagelseslogikken i klienten dækker opstartstiden. Se [offline.md](offline.md).
+
 ## Rotation
 
 - **Globalt administratortoken**: `POST /api/admin/global-token/rotate` via administrationsfladen,
@@ -42,4 +61,8 @@ lister; al historik er intakt.
 ## Kendte begrænsninger
 
 Se afslutningsrapporten for den aktuelle liste over kendte begrænsninger og resterende manuelle
-trin (f.eks. "kopiér trip"-UI, Background Sync, og fuld gennemførsel af end-to-end-testplanen).
+trin (f.eks. "kopiér trip"-UI og fuld gennemførsel af end-to-end-testplanen).
+
+Background Sync er implementeret (`src/sw.ts`), men understøttes ikke af iOS/Safari. På iPhone
+sendes køen i stedet ved appstart, når appen bliver synlig, og når `online`-hændelsen fyrer —
+altså så snart appen åbnes med forbindelse.
