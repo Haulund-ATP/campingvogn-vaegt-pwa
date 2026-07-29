@@ -14,9 +14,6 @@ concurrency:
   group: production-deploy
   cancel-in-progress: false
 
-env:
-  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/campingvogn-vaegt-pwa
-
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
@@ -35,6 +32,8 @@ jobs:
       - name: Build and push image
         id: meta
         run: |
+          OWNER_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE_NAME="ghcr.io/${OWNER_LOWER}/campingvogn-vaegt-pwa"
           IMAGE_TAG="${IMAGE_NAME}:${{ github.sha }}"
           docker build -t "$IMAGE_TAG" -t "${IMAGE_NAME}:latest" .
           docker push "$IMAGE_TAG"
