@@ -6,9 +6,6 @@ function required(name: string): string {
 
 export function loadEnv() {
   return {
-    tenantId: required("TENANT_ID"),
-    clientId: required("CLIENT_ID"),
-    clientSecret: required("CLIENT_SECRET"),
     siteId: required("SHAREPOINT_SITE_ID"),
     entriesListId: required("ENTRIES_LIST_ID"),
     tripsListId: required("TRIPS_LIST_ID"),
@@ -17,6 +14,8 @@ export function loadEnv() {
     sessionSigningSecret: required("SESSION_SIGNING_SECRET"),
     rateLimitPepper: required("RATE_LIMIT_PEPPER"),
     publicAppUrl: required("PUBLIC_APP_URL"),
+    // Kun til lokal udvikling: Managed Identity findes ikke uden for Azure,
+    // så DefaultAzureCredential falder tilbage til Azure CLI/VS Code-login lokalt.
   };
 }
 

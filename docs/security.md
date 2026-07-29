@@ -25,12 +25,19 @@ beskyttelse.
 
 ## Rate limiting
 
-Bounded in-memory tællere pr. Function-instans (se `api/src/lib/rateLimit.ts`). Dette er **ikke**
-en absolut distribueret garanti i serverless drift — flere samtidige instanser har hver deres
-tælling. For et lille privat installation er det tilstrækkeligt som første forsvarslinje mod
+Bounded in-memory tællere pr. container-instans (se `server/src/lib/rateLimit.ts`). Dette er
+**ikke** en absolut distribueret garanti — med `max-replicas 1` kører der dog kun én instans ad
+gangen i denne løsning, hvilket gør det til en reelt effektiv første forsvarslinje mod
 brute-force af tokens; det erstatter ikke tokenernes egen entropi.
+
+## Managed Identity i stedet for client secret
+
+Serveren autentificerer til Microsoft Graph med Container Appens system-assigned Managed Identity
+via `@azure/identity`s `DefaultAzureCredential` — der findes intet Entra client secret at lække,
+rotere eller opbevare i denne løsning. Lokalt (uden for Azure) falder samme kode tilbage til
+udviklerens egen `az login`-session.
 
 ## Hvad browseren aldrig ser
 
-Graph-access/refresh-tokens, client secrets, SharePoint-legitimationsoplysninger,
-session-signeringsnøgle, token-peppers, rate-limit-pepper. Se `.gitignore` og `SECURITY.md`.
+Graph-access/refresh-tokens, SharePoint-legitimationsoplysninger, session-signeringsnøgle,
+token-peppers, rate-limit-pepper. Se `.gitignore` og `SECURITY.md`.

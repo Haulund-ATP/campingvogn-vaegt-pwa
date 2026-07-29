@@ -27,8 +27,7 @@ dist-ssr
 .env
 .env.*
 !.env.example
-local.settings.json
-api/local.settings.json
+server/.env
 
 # Genererede secrets/QR-koder — må aldrig commits
 private-qr/
@@ -38,8 +37,8 @@ production-output/
 *.pem
 *.key
 
-# Azure/Functions build-output
-api/dist
+# Server build-output
+server/dist
 .azure
 
 # Test/coverage

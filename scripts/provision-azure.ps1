@@ -1,64 +1,79 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-  Opretter resource group og Azure Static Web App (Free) med integrerede Functions,
-  og sætter de ikke-følsomme + genererede hemmelige application settings.
+  Opretter et Azure Container Apps-miljø (Consumption, scale-to-zero) og selve Container Appen
+  med system-assigned Managed Identity — intet Entra client secret involveret.
 
 .DESCRIPTION
-  Genererer TOKEN_HASH_PEPPER, SESSION_SIGNING_SECRET og RATE_LIMIT_PEPPER lokalt og sætter dem
-  direkte i Azure — de udskrives én gang, så TOKEN_HASH_PEPPER kan genbruges i provision-sharepoint.ps1.
-  Idempotent: genkørsel opdaterer ikke eksisterende peppers/secrets, kun manglende ressourcer.
+  Forsøger EU/EØS-regioner i rækkefølge (kan overstyres med -PreferredLocations). Stopper med en
+  fejl, hvis ingen af de angivne regioner accepterer ressourcen — bruger ALDRIG en region uden
+  for EU/EØS som fallback. Sætter logs-destination til 'none' for at undgå en betalt Log
+  Analytics-ressource. Genererer TOKEN_HASH_PEPPER, SESSION_SIGNING_SECRET og RATE_LIMIT_PEPPER
+  lokalt og sætter dem direkte som Container App-secrets/env-variabler.
 #>
 param(
     [string]$ResourceGroup = "rg-campingvogn-vaegt-pwa",
-    [string]$Location = "westeurope",
-    [string]$StaticWebAppName = "campingvogn-vaegt-pwa",
-    [Parameter(Mandatory = $true)] [string]$TenantId,
-    [Parameter(Mandatory = $true)] [string]$TenantDomain,
+    [string[]]$PreferredLocations = @("denmarkeast", "swedencentral", "swedensouth", "northeurope", "westeurope"),
+    [string]$EnvironmentName = "cae-campingvogn-vaegt-pwa",
+    [string]$ContainerAppName = "campingvogn-vaegt-pwa",
+    [string]$ImageName = "ghcr.io/REPLACE_WITH_GITHUB_OWNER/campingvogn-vaegt-pwa:latest",
     [Parameter(Mandatory = $true)] [string]$SharePointSiteUrl,
     [string]$PublicAppUrl = "https://c.h-aa.dk"
 )
 
 $ErrorActionPreference = "Stop"
 
-Write-Host "Kontrollerer at Azure Static Web Apps med integreret API understøttes i '$Location'..."
-$supportedLocations = az provider show --namespace Microsoft.Web --query "resourceTypes[?resourceType=='staticSites'].locations | [0]" -o json | ConvertFrom-Json
-if ($supportedLocations -notcontains $Location) {
-    Write-Warning "Regionen '$Location' er ikke i den aktuelle liste over understøttede lokationer: $($supportedLocations -join ', ')"
-    throw "Vælg en understøttet region og kør scriptet igen med -Location."
-}
-Write-Host "OK: '$Location' understøttes." -ForegroundColor Green
+az extension add --name containerapp --upgrade -y 2>$null | Out-Null
+az provider register --namespace Microsoft.App --wait 2>$null | Out-Null
+az provider register --namespace Microsoft.OperationalInsights --wait 2>$null | Out-Null
 
-Write-Host "`nForventet driftsomkostning:"
-Write-Host "  Azure Static Web Apps Free:         0 kr./måned"
-Write-Host "  Integrerede managed Functions:      0 kr./måned"
-Write-Host "  Managed TLS-certifikat:             0 kr./måned"
-Write-Host "  Samlet forventet drift:             0 kr./måned"
-Write-Host ""
+Write-Host "Forventet driftsomkostning:"
+Write-Host "  Container Apps Consumption (scale-to-zero, min=0):  0 kr. i hvile, ganske få øre/CPU-sekund ved aktiv trafik"
+Write-Host "  Managed TLS-certifikat:                              0 kr."
+Write-Host "  Logs destination 'none':                             0 kr. (ingen Log Analytics-ressource)"
+Write-Host "  Samlet forventet drift ved normal privat brug:       ~0 kr.`n"
 
 $rgExists = az group exists --name $ResourceGroup | ConvertFrom-Json
 if (-not $rgExists) {
-    Write-Host "Opretter resource group '$ResourceGroup' i '$Location'..."
-    az group create --name $ResourceGroup --location $Location | Out-Null
-} else {
-    Write-Host "Resource group '$ResourceGroup' findes allerede." -ForegroundColor Yellow
+    Write-Host "Opretter resource group '$ResourceGroup'..."
+    # Resource groupens egen 'location' er kun metadata og behøver ikke matche miljøets region.
+    az group create --name $ResourceGroup --location "westeurope" | Out-Null
 }
 
-$existingSwa = az staticwebapp show --name $StaticWebAppName --resource-group $ResourceGroup 2>$null | ConvertFrom-Json
-if ($existingSwa) {
-    Write-Host "Static Web App '$StaticWebAppName' findes allerede." -ForegroundColor Yellow
+$existingEnv = az containerapp env show --name $EnvironmentName --resource-group $ResourceGroup 2>$null | ConvertFrom-Json
+if ($existingEnv) {
+    Write-Host "Container Apps-miljø '$EnvironmentName' findes allerede i '$($existingEnv.location)'." -ForegroundColor Yellow
+    $chosenLocation = $existingEnv.location
 } else {
-    Write-Host "Opretter Azure Static Web App (Free) '$StaticWebAppName'..."
-    az staticwebapp create `
-        --name $StaticWebAppName `
-        --resource-group $ResourceGroup `
-        --location $Location `
-        --sku Free | Out-Null
-    Write-Host "Static Web App oprettet." -ForegroundColor Green
-}
+    $chosenLocation = $null
+    foreach ($location in $PreferredLocations) {
+        Write-Host "Forsøger region '$location'..."
+        $result = az containerapp env create `
+            --name $EnvironmentName `
+            --resource-group $ResourceGroup `
+            --location $location `
+            --logs-destination none 2>&1
 
-$defaultHostname = az staticwebapp show --name $StaticWebAppName --resource-group $ResourceGroup --query "defaultHostname" -o tsv
-Write-Host "Midlertidig standard-URL (kun til test): https://$defaultHostname"
+        if ($LASTEXITCODE -eq 0) {
+            $chosenLocation = $location
+            Write-Host "Miljø oprettet i '$location'." -ForegroundColor Green
+            break
+        }
+
+        if ($result -match "not accepting new customers" -or $result -match "LocationNotAvailable") {
+            Write-Warning "Region '$location' er ikke tilgængelig lige nu. Prøver næste region i rækkefølgen."
+            continue
+        }
+
+        # Uventet fejl (ikke regionsrelateret) — vis den og stop.
+        Write-Host $result
+        throw "Uventet fejl ved oprettelse af Container Apps-miljø i '$location'."
+    }
+
+    if (-not $chosenLocation) {
+        throw "Ingen af de angivne EU/EØS-regioner ($($PreferredLocations -join ', ')) accepterer i øjeblikket nye Container Apps-miljøer. USA-regioner bruges ALDRIG som fallback. Prøv igen senere."
+    }
+}
 
 function New-RandomSecret {
     $bytes = New-Object byte[] 32
@@ -66,40 +81,58 @@ function New-RandomSecret {
     return [Convert]::ToBase64String($bytes)
 }
 
-$existingSettings = az staticwebapp appsettings list --name $StaticWebAppName --resource-group $ResourceGroup --query "properties" | ConvertFrom-Json
+$existingApp = az containerapp show --name $ContainerAppName --resource-group $ResourceGroup 2>$null | ConvertFrom-Json
 
-$settingsToSet = @{
-    TENANT_DOMAIN       = $TenantDomain
-    TENANT_ID           = $TenantId
-    SHAREPOINT_SITE_URL = $SharePointSiteUrl
-    PUBLIC_APP_URL      = $PublicAppUrl
-}
-
+$secretNames = @("token-hash-pepper", "session-signing-secret", "rate-limit-pepper")
 $generatedSecrets = @{}
-foreach ($name in @("TOKEN_HASH_PEPPER", "SESSION_SIGNING_SECRET", "RATE_LIMIT_PEPPER")) {
-    if ($existingSettings.PSObject.Properties.Name -contains $name) {
-        Write-Host "$name findes allerede — bevares uændret." -ForegroundColor Yellow
-    } else {
+if (-not $existingApp) {
+    foreach ($name in $secretNames) {
         $generatedSecrets[$name] = New-RandomSecret
-        $settingsToSet[$name] = $generatedSecrets[$name]
     }
 }
 
-$settingArgs = $settingsToSet.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }
-az staticwebapp appsettings set --name $StaticWebAppName --resource-group $ResourceGroup --setting-names $settingArgs | Out-Null
+if (-not $existingApp) {
+    Write-Host "`nOpretter Container App '$ContainerAppName' (Consumption, min=0, max=1, scale-to-zero)..."
+    $secretArgs = $secretNames | ForEach-Object { "$_=$($generatedSecrets[$_])" }
 
-Write-Host "`nApplication settings opdateret." -ForegroundColor Green
+    az containerapp create `
+        --name $ContainerAppName `
+        --resource-group $ResourceGroup `
+        --environment $EnvironmentName `
+        --image $ImageName `
+        --target-port 8080 `
+        --ingress external `
+        --min-replicas 0 `
+        --max-replicas 1 `
+        --system-assigned `
+        --secrets $secretArgs `
+        --env-vars `
+            "SHAREPOINT_SITE_URL=$SharePointSiteUrl" `
+            "PUBLIC_APP_URL=$PublicAppUrl" `
+            "TOKEN_HASH_PEPPER=secretref:token-hash-pepper" `
+            "SESSION_SIGNING_SECRET=secretref:session-signing-secret" `
+            "RATE_LIMIT_PEPPER=secretref:rate-limit-pepper" | Out-Null
 
-if ($generatedSecrets.ContainsKey("TOKEN_HASH_PEPPER")) {
-    Write-Host "`n=================================================================" -ForegroundColor Green
-    Write-Host " TOKEN_HASH_PEPPER (skal genbruges i provision-sharepoint.ps1, vises kun nu):" -ForegroundColor Green
-    Write-Host " $($generatedSecrets['TOKEN_HASH_PEPPER'])"
-    Write-Host "=================================================================" -ForegroundColor Green
+    Write-Host "Container App oprettet." -ForegroundColor Green
+} else {
+    Write-Host "Container App '$ContainerAppName' findes allerede — secrets/peppers bevares uændret." -ForegroundColor Yellow
 }
 
-Write-Host "`nOversigt:"
-Write-Host "  Resource group:    $ResourceGroup"
-Write-Host "  Location:          $Location"
-Write-Host "  Static Web App:    $StaticWebAppName"
-Write-Host "  Standard-URL:      https://$defaultHostname"
-Write-Host "`nKør dernæst scripts/configure-entra-app.ps1 -StaticWebAppName $StaticWebAppName -ResourceGroup $ResourceGroup"
+$principalId = az containerapp show --name $ContainerAppName --resource-group $ResourceGroup --query "identity.principalId" -o tsv
+$fqdn = az containerapp show --name $ContainerAppName --resource-group $ResourceGroup --query "properties.configuration.ingress.fqdn" -o tsv
+
+Write-Host "`nOversigt:" -ForegroundColor Cyan
+Write-Host "  Resource group:            $ResourceGroup"
+Write-Host "  Container Apps-miljø:      $EnvironmentName ($chosenLocation)"
+Write-Host "  Container App:             $ContainerAppName"
+Write-Host "  Managed Identity Principal: $principalId"
+Write-Host "  Midlertidig standard-URL:  https://$fqdn"
+
+if (-not $existingApp) {
+    Write-Host "`nGenererede peppers/secrets er sat direkte i Container App'en (vises ikke igen her)." -ForegroundColor Green
+}
+
+Write-Host "`nKør dernæst:"
+Write-Host "  ./scripts/configure-selected-permissions.ps1 -TenantDomain <tenant> -SiteUrl $SharePointSiteUrl -PrincipalId $principalId"
+Write-Host "  ./scripts/provision-sharepoint.ps1 ..."
+Write-Host "  ./scripts/configure-domain.ps1 -ContainerAppName $ContainerAppName -ResourceGroup $ResourceGroup"

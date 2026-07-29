@@ -1,15 +1,15 @@
-import type { HttpResponseInit } from "@azure/functions";
 import { randomUUID } from "node:crypto";
 import type { ProblemDetails } from "../shared/types.js";
 
 const PROBLEM_CONTENT_TYPE = "application/problem+json";
 
-export function problem(
-  status: number,
-  title: string,
-  detail?: string,
-  instance?: string
-): HttpResponseInit {
+export interface ApiResult {
+  status: number;
+  jsonBody: unknown;
+  headers?: Record<string, string | string[]>;
+}
+
+export function problem(status: number, title: string, detail?: string, instance?: string): ApiResult {
   const body: ProblemDetails = {
     type: `https://c.h-aa.dk/problems/${status}`,
     title,

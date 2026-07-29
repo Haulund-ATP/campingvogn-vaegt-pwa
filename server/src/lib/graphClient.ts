@@ -1,5 +1,12 @@
-// Application-only Microsoft Graph-klient via client credentials flow.
-// Ingen tokens forlader nogensinde serveren.
+// Microsoft Graph-klient der bruger Container Appens system-assigned Managed Identity —
+// intet Entra client secret findes nogen steder i denne løsning.
+// Lokalt (uden for Azure) falder DefaultAzureCredential tilbage til Azure CLI-login.
+
+import { DefaultAzureCredential } from "@azure/identity";
+
+const GRAPH_SCOPE = "https://graph.microsoft.com/.default";
+
+const credential = new DefaultAzureCredential();
 
 interface CachedToken {
   accessToken: string;
@@ -8,39 +15,19 @@ interface CachedToken {
 
 let cachedToken: CachedToken | null = null;
 
-export interface GraphConfig {
-  tenantId: string;
-  clientId: string;
-  clientSecret: string;
-}
-
-async function acquireAppToken(config: GraphConfig): Promise<string> {
+async function acquireAppToken(): Promise<string> {
   if (cachedToken && cachedToken.expiresAt - 60_000 > Date.now()) {
     return cachedToken.accessToken;
   }
 
-  const tokenUrl = `https://login.microsoftonline.com/${config.tenantId}/oauth2/v2.0/token`;
-  const body = new URLSearchParams({
-    client_id: config.clientId,
-    client_secret: config.clientSecret,
-    scope: "https://graph.microsoft.com/.default",
-    grant_type: "client_credentials",
-  });
-
-  const response = await fetch(tokenUrl, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body,
-  });
-
-  if (!response.ok) {
-    throw new Error(`Kunne ikke hente Graph-token: HTTP ${response.status}`);
+  const tokenResponse = await credential.getToken(GRAPH_SCOPE);
+  if (!tokenResponse) {
+    throw new Error("Kunne ikke hente Graph-token via Managed Identity");
   }
 
-  const json = (await response.json()) as { access_token: string; expires_in: number };
   cachedToken = {
-    accessToken: json.access_token,
-    expiresAt: Date.now() + json.expires_in * 1000,
+    accessToken: tokenResponse.token,
+    expiresAt: tokenResponse.expiresOnTimestamp,
   };
   return cachedToken.accessToken;
 }
@@ -59,13 +46,8 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export async function graphFetch(
-  config: GraphConfig,
-  path: string,
-  init: RequestInit = {},
-  attempt = 0
-): Promise<Response> {
-  const token = await acquireAppToken(config);
+export async function graphFetch(path: string, init: RequestInit = {}, attempt = 0): Promise<Response> {
+  const token = await acquireAppToken();
   const url = path.startsWith("https://") ? path : `https://graph.microsoft.com/v1.0${path}`;
 
   const response = await fetch(url, {
@@ -85,7 +67,7 @@ export async function graphFetch(
     const retryAfterMs = retryAfterHeader ? Number(retryAfterHeader) * 1000 : 0;
     const backoffMs = Math.max(retryAfterMs, 2 ** attempt * 300) + Math.random() * 250;
     await sleep(backoffMs);
-    return graphFetch(config, path, init, attempt + 1);
+    return graphFetch(path, init, attempt + 1);
   }
 
   if (!response.ok && response.status !== 404 && response.status !== 409) {

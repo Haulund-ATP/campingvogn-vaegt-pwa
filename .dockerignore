@@ -1,0 +1,15 @@
+node_modules
+server/node_modules
+dist
+server/dist
+.git
+.github
+docs
+scripts
+private-qr
+generated-secrets
+production-output
+*.md
+.env
+.env.*
+local.settings.json

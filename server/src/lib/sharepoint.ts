@@ -1,6 +1,6 @@
-import { graphFetch, type GraphConfig } from "./graphClient.js";
+import { graphFetch } from "./graphClient.js";
 
-export interface SharePointListConfig extends GraphConfig {
+export interface SharePointListConfig {
   siteId: string;
 }
 
@@ -19,7 +19,7 @@ export async function createListItem<TFields>(
   listId: string,
   fields: TFields
 ): Promise<SharePointItem<TFields>> {
-  const response = await graphFetch(config, `/sites/${config.siteId}/lists/${listId}/items`, {
+  const response = await graphFetch(`/sites/${config.siteId}/lists/${listId}/items`, {
     method: "POST",
     body: JSON.stringify({ fields }),
   });
@@ -33,7 +33,7 @@ export async function updateListItem<TFields>(
   itemId: string,
   fields: Partial<TFields>
 ): Promise<void> {
-  await graphFetch(config, fieldsUrl(config.siteId, listId, itemId), {
+  await graphFetch(fieldsUrl(config.siteId, listId, itemId), {
     method: "PATCH",
     body: JSON.stringify(fields),
   });
@@ -44,10 +44,7 @@ export async function getListItemById<TFields>(
   listId: string,
   itemId: string
 ): Promise<SharePointItem<TFields> | null> {
-  const response = await graphFetch(
-    config,
-    `/sites/${config.siteId}/lists/${listId}/items/${itemId}?expand=fields`
-  );
+  const response = await graphFetch(`/sites/${config.siteId}/lists/${listId}/items/${itemId}?expand=fields`);
   if (response.status === 404) return null;
   const json = (await response.json()) as { id: string; fields: TFields };
   return { id: json.id, fields: json.fields };
@@ -76,7 +73,7 @@ export async function queryListItems<TFields>(
   const maxPages = options.maxPages ?? 25;
 
   for (let page = 0; page < maxPages; page++) {
-    const response = await graphFetch(config, url, {
+    const response = await graphFetch(url, {
       headers: { prefer: "HonorNonIndexedQueriesWarningMayFailRandomly" },
     });
     const json = (await response.json()) as {

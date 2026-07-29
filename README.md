@@ -1,7 +1,7 @@
 # Campingvogn Vægt
 
 Lille, selvstændig PWA til at registrere vægt i en campingvogn på tværs af flere trips —
-uden Microsoft-login for de almindelige brugere, og med forventet driftsomkostning på 0 kr.
+uden Microsoft-login for de almindelige brugere, og med forventet driftsomkostning tæt på 0 kr.
 
 ## Formål
 
@@ -13,29 +13,33 @@ QR-koder (Tilføj vægt / Fjern vægt).
 ## Arkitektur
 
 ```
-React + TypeScript + Vite PWA  →  Azure Static Web Apps (Free)
-                                      └─ integrerede Azure Functions (Node.js/TS)
-                                           └─ Microsoft Graph (app-only, Sites.Selected)
-                                                └─ SharePoint Online (3 fælles lister)
+React + TypeScript + Vite PWA + Node/Express-server (samme container)
+  →  Azure Container Apps (Consumption, scale-to-zero, EU-region)
+       └─ Microsoft Graph via system-assigned Managed Identity (Sites.Selected)
+            └─ SharePoint Online (3 fælles lister)
 ```
 
-Se [docs/architecture.md](docs/architecture.md) for detaljer.
+Ingen Entra client secret findes nogen steder i denne løsning — Container Appen autentificerer
+til Microsoft Graph med sin egen Managed Identity. Se [docs/architecture.md](docs/architecture.md)
+for detaljer og [docs/adr-001-container-apps.md](docs/adr-001-container-apps.md) for hvorfor
+arkitekturen skiftede væk fra Azure Static Web Apps undervejs.
 
 ## Forventet pris
 
 | Komponent | Pris/måned |
 |---|---:|
-| Azure Static Web Apps Free | 0 kr. |
-| Integrerede managed Functions | 0 kr. |
-| Managed TLS | 0 kr. |
+| Container Apps Consumption (scale-to-zero, min=0) | ~0 kr. ved normalt privat forbrug |
+| Managed TLS-certifikat | 0 kr. |
+| Logs destination "none" (ingen Log Analytics) | 0 kr. |
+| GitHub Container Registry (offentligt image) | 0 kr. |
 | SharePoint-lister | Inkluderet i eksisterende Microsoft 365 |
-| **Samlet** | **0 kr.** |
+| **Samlet** | **~0 kr.** |
 
 ## Forudsætninger
 
-- Node.js 20+, npm
+- Node.js 20+, npm, Docker (til lokal image-build/test)
 - PowerShell 7+
-- Azure CLI (`az`), logget ind som `thomas@haulund-aadorf.dk`
+- Azure CLI (`az`) med `containerapp`-extension, logget ind som `thomas@haulund-aadorf.dk`
 - GitHub CLI (`gh`), logget ind på den personlige konto
 - Microsoft.Graph PowerShell-modul (`Install-Module Microsoft.Graph -Scope CurrentUser`)
 - Et Microsoft 365-tenant med SharePoint Online
@@ -44,20 +48,21 @@ Se [docs/architecture.md](docs/architecture.md) for detaljer.
 
 ```powershell
 npm install
-npm run dev            # frontend på http://localhost:5173
+npm run dev              # frontend på http://localhost:5173
 
-cd api
+cd server
 npm install
-copy ../.env.example local.settings.json   # udfyld lokale test-værdier — commit ALDRIG denne fil
-func start              # API på http://localhost:7071
+copy ../.env.example .env   # udfyld lokale test-værdier — commit ALDRIG denne fil
+npm run build && npm start  # server på http://localhost:8080 (Vite proxy'er /api dertil)
 ```
 
-Vite proxy'er `/api/*` til `http://localhost:7071` under `npm run dev`.
+Lokalt uden for Azure falder Managed Identity-koden tilbage til `DefaultAzureCredential`, som
+bruger din egen `az login`-session — sørg for at være logget ind med adgang til testsitet.
 
 ## Tests
 
 ```powershell
-npm test          # frontend + shared beregningslogik + API-lib (Vitest)
+npm test          # frontend + shared beregningslogik + server-lib (Vitest)
 npm run lint       # oxlint
 ```
 
@@ -65,14 +70,14 @@ npm run lint       # oxlint
 
 1. `./scripts/validate-environment.ps1`
 2. `./scripts/login-azure.ps1`
-3. `./scripts/provision-azure.ps1 -TenantId <tenant-id> -TenantDomain haulundaadorf.onmicrosoft.com -SharePointSiteUrl https://haulundaadorf.sharepoint.com/sites/cv`
-4. `./scripts/configure-entra-app.ps1 -StaticWebAppName campingvogn-vaegt-pwa -ResourceGroup rg-campingvogn-vaegt-pwa`
-5. `./scripts/configure-selected-permissions.ps1 -TenantDomain haulundaadorf.onmicrosoft.com -SiteUrl https://haulundaadorf.sharepoint.com/sites/cv -RuntimeAppId <client-id fra trin 4>`
-6. `./scripts/provision-sharepoint.ps1 -TenantDomain haulundaadorf.onmicrosoft.com -SiteUrl https://haulundaadorf.sharepoint.com/sites/cv -TokenHashPepper <pepper fra trin 3>`
-7. `./scripts/configure-domain.ps1`
-8. `./scripts/configure-github-oidc.ps1 -GitHubOwner <dit-github-brugernavn>`
-9. Sæt de udskrevne GitHub Environment-secrets (`production`) og push til `main` for at deploye.
-10. `./scripts/generate-qr.ps1 -BaseUrl https://c.h-aa.dk -GlobalAdminToken <token fra trin 6> -OutputDirectory ./private-qr/admin`
+3. `./scripts/provision-azure.ps1 -SharePointSiteUrl https://haulundaadorf.sharepoint.com/sites/cv -ImageName ghcr.io/<github-bruger>/campingvogn-vaegt-pwa:latest`
+   (forsøger `denmarkeast → swedencentral → swedensouth → northeurope → westeurope`, stopper hvis ingen EU-region er tilgængelig)
+4. `./scripts/configure-selected-permissions.ps1 -TenantDomain haulundaadorf.onmicrosoft.com -SiteUrl https://haulundaadorf.sharepoint.com/sites/cv -PrincipalId <Managed Identity principalId fra trin 3>`
+5. `./scripts/provision-sharepoint.ps1 -TenantDomain haulundaadorf.onmicrosoft.com -SiteUrl https://haulundaadorf.sharepoint.com/sites/cv -TokenHashPepper <pepper fra trin 3>`
+6. `./scripts/configure-domain.ps1`
+7. `./scripts/configure-github-oidc.ps1 -GitHubOwner <dit-github-brugernavn>`
+8. Sæt de udskrevne GitHub Environment-secrets (`production`, inkl. `AZURE_CONTAINER_APP_NAME`) og push til `main` — CI bygger og pusher imaget til GHCR og opdaterer Container Appen.
+9. `./scripts/generate-qr.ps1 -BaseUrl https://c.h-aa.dk -GlobalAdminToken <token fra trin 5> -OutputDirectory ./private-qr/admin`
 
 Se [docs/sharepoint.md](docs/sharepoint.md), [docs/entra-permissions.md](docs/entra-permissions.md) og
 [docs/operations.md](docs/operations.md) for detaljer, drift, tokenrotation og afinstallation.
@@ -89,5 +94,5 @@ Se [SECURITY.md](SECURITY.md) og [docs/security.md](docs/security.md).
 
 - **401 fra `/api/status`**: ingen gyldig session — scan en QR-kode igen.
 - **QR-kode virker ikke**: trippet kan være arkiveret, eller tokenet er roteret. Generér en ny QR-kode.
-- **Static Web App bygger ikke API'et**: kontrollér at `api/package.json` og `api/host.json` findes.
+- **Container App starter ikke**: tjek `az containerapp logs show --name campingvogn-vaegt-pwa --resource-group rg-campingvogn-vaegt-pwa` for manglende application settings.
 - Se [docs/operations.md](docs/operations.md) for flere scenarier.
