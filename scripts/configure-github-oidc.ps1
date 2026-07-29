@@ -68,6 +68,14 @@ function Set-FederatedCredential {
 Set-FederatedCredential -Name "main-branch" -Subject "repo:${GitHubOwner}/${RepoName}:ref:refs/heads/main"
 Set-FederatedCredential -Name "production-environment" -Subject "repo:${GitHubOwner}/${RepoName}:environment:production"
 
+# GitHub's faktiske OIDC 'sub'-claim er observeret at være ID-kvalificeret
+# (repo:<owner>@<ownerId>/<repo>@<repoId>:...), ikke kun navnebaseret. Begge varianter
+# oprettes derfor, så login virker uanset hvilket format GitHub præsenterer.
+$repoInfo = gh api "repos/${GitHubOwner}/${RepoName}" --jq "{ownerId: .owner.id, repoId: .id}" | ConvertFrom-Json
+$idQualified = "${GitHubOwner}@$($repoInfo.ownerId)/${RepoName}@$($repoInfo.repoId)"
+Set-FederatedCredential -Name "main-branch-idqualified" -Subject "repo:${idQualified}:ref:refs/heads/main"
+Set-FederatedCredential -Name "production-environment-idqualified" -Subject "repo:${idQualified}:environment:production"
+
 Write-Host "`nSæt følgende GitHub Environment-secrets under 'production' (repo Settings > Environments):" -ForegroundColor Cyan
 Write-Host "  AZURE_CLIENT_ID       = $appId"
 Write-Host "  AZURE_TENANT_ID       = $tenantId"
