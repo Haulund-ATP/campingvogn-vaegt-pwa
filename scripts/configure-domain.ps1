@@ -12,6 +12,7 @@
 param(
     [string]$ContainerAppName = "campingvogn-vaegt-pwa",
     [string]$ResourceGroup = "rg-campingvogn-vaegt-pwa",
+    [string]$EnvironmentName = "cae-campingvogn-vaegt-pwa",
     [string]$CustomDomain = "c.h-aa.dk",
     [string]$RootDomain = "h-aa.dk"
 )
@@ -42,7 +43,11 @@ if ($alreadyConfigured) {
         Write-Host "  2) Type: TXT     Værtsnavn: asuid.$subdomainLabel       Værdi: $verificationId"
         Write-Host "  TTL: 3600 (1 time) — anbefalet.`n"
         Write-Host "Rediger eller slet ALDRIG eksisterende MX/SPF/DKIM/DMARC/Autodiscover/Microsoft 365-records." -ForegroundColor Red
-        Read-Host "Tryk Enter når begge records er oprettet og har propageret"
+        if ([Environment]::UserInteractive) {
+            Read-Host "Tryk Enter når begge records er oprettet og har propageret"
+        } else {
+            Write-Host "Ikke-interaktiv kørsel: fortsætter uden at vente. Kør scriptet igen, når DNS er propageret, hvis hostname-tilføjelsen fejler." -ForegroundColor Yellow
+        }
     }
 
     Write-Host "`nTilføjer det brugerdefinerede domæne til Container App..."
@@ -53,6 +58,7 @@ Write-Host "`nBinder gratis managed TLS-certifikat..."
 az containerapp hostname bind `
     --name $ContainerAppName `
     --resource-group $ResourceGroup `
+    --environment $EnvironmentName `
     --hostname $CustomDomain `
     --validation-method CNAME | Out-Null
 

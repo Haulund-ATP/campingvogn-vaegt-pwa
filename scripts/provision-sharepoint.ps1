@@ -31,7 +31,7 @@ function New-HashedToken {
     $bytes = New-Object byte[] 32
     [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
     $token = [Convert]::ToBase64String($bytes).TrimEnd("=").Replace("+", "-").Replace("/", "_")
-    $hmac = New-Object System.Security.Cryptography.HMACSHA256([System.Text.Encoding]::UTF8.GetBytes($Pepper))
+    $hmac = New-Object System.Security.Cryptography.HMACSHA256(, [System.Text.Encoding]::UTF8.GetBytes($Pepper))
     $hashBytes = $hmac.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($token))
     $hash = ($hashBytes | ForEach-Object { $_.ToString("x2") }) -join ""
     return @{ Token = $token; Hash = $hash }
@@ -94,7 +94,9 @@ function Set-ColumnsIdempotent {
         if ($existingNames -contains $col.name) {
             $current = $existing | Where-Object { $_.name -eq $col.name } | Select-Object -First 1
             $expectedType = $col.expectedType
-            $matchesType = $current.PSObject.Properties.Name -contains $expectedType
+            # Invoke-MgGraphRequest returnerer Hashtables, ikke PSCustomObjects — brug ContainsKey,
+            # ikke .PSObject.Properties (som kun reflekterer Hashtable-typens egne .NET-medlemmer).
+            $matchesType = $current.ContainsKey($expectedType)
             if (-not $matchesType) {
                 throw "Kolonnen '$($col.name)' findes allerede med en anden datatype end forventet ($expectedType). Ret manuelt eller vælg et andet listenavn."
             }
@@ -160,7 +162,7 @@ $systemColumns = @(
 Set-ColumnsIdempotent -ListId $systemList.id -ColumnDefinitions $systemColumns
 
 # --- Systemrække + første globale administratortoken ---
-$existingSystemItems = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/v1.0/sites/$siteId/lists/$($systemList.id)/items?`$expand=fields&`$filter=fields/Title eq 'system'"
+$existingSystemItems = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/v1.0/sites/$siteId/lists/$($systemList.id)/items?`$expand=fields&`$filter=fields/Title eq 'system'" -Headers @{ Prefer = "HonorNonIndexedQueriesWarningMayFailRandomly" }
 
 if ($existingSystemItems.value.Count -gt 0) {
     Write-Host "`nSystemrækken findes allerede. Det eksisterende globale administratortoken bevares (kan ikke vises igen)." -ForegroundColor Yellow
