@@ -1,0 +1,10 @@
+*.ts
+!*.d.ts
+.vscode
+.git*
+.vscode
+tsconfig.json
+local.settings.json
+test
+*.test.js
+src
