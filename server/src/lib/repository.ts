@@ -13,7 +13,7 @@ import type { EntryCategory, EntryRecord, EntrySource, EntryType } from "../shar
 
 export interface TripFields {
   Title: string; // TripId
-  DisplayName: string;
+  TripDisplayName: string;
   StartWeight: number;
   MaximumWeight: number;
   MaximumEntryWeight: number;
@@ -45,7 +45,7 @@ function toTrip(itemId: string, fields: TripFields): Trip {
   return {
     itemId,
     tripId: fields.Title,
-    displayName: fields.DisplayName,
+    displayName: fields.TripDisplayName,
     startWeightKg: fields.StartWeight,
     maximumWeightKg: fields.MaximumWeight,
     maximumEntryWeightKg: fields.MaximumEntryWeight,
@@ -82,7 +82,7 @@ export async function createTrip(
 ): Promise<Trip> {
   const fields: TripFields = {
     Title: input.tripId,
-    DisplayName: input.displayName,
+    TripDisplayName: input.displayName,
     StartWeight: input.startWeightKg,
     MaximumWeight: input.maximumWeightKg,
     MaximumEntryWeight: input.maximumEntryWeightKg,

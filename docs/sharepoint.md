@@ -16,6 +16,11 @@ fjernelse), `EntryType` (`Addition`/`Removal`/`Reversal`), `OccurredAt` (indekse
 totalvægt, maksimal ændring pr. registrering, `IsActive`, og kun HMAC-hash + version af
 public token — aldrig tokenet i klartekst.
 
+**Afvigelse fra den oprindelige opgavebeskrivelse:** kolonnen med tripnavnet hedder
+`TripDisplayName`, ikke `DisplayName`. Microsoft Graphs SharePoint-liste-API accepterer stille
+skriv til et felt kaldet præcis `DisplayName` (HTTP 200), men gemmer aldrig værdien — bekræftet ved
+direkte test mod tenanten. Det er tilsyneladende et reserveret feltnavn i Graphs liste-item-model.
+
 ## CampingvognVaegtSystem
 
 Én enkelt række med `Title = "system"`. Indeholder kun HMAC-hash + version af det globale

@@ -171,7 +171,7 @@ adminTripsRouter.put("/admin/trips/:tripId", async (req, res) => {
   }
 
   await updateTrip(env, trip.itemId, {
-    DisplayName: body.displayName ?? trip.displayName,
+    TripDisplayName: body.displayName ?? trip.displayName,
     StartWeight: nextStartWeightKg,
     MaximumWeight: nextMaximumWeightKg,
     MaximumEntryWeight: nextMaximumEntryWeightKg,

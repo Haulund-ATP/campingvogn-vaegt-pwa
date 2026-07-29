@@ -130,7 +130,10 @@ Set-ColumnsIdempotent -ListId $entriesList.id -ColumnDefinitions $entriesColumns
 # --- Trips ---
 $tripsList = Get-OrCreateList -Name $TripsListName -Description "Én række pr. trip"
 $tripsColumns = @(
-    @{ name = "DisplayName"; expectedType = "text"; definition = @{ name = "DisplayName"; text = @{} } }
+    # Bemærk: kolonnen hedder bevidst 'TripDisplayName', ikke 'DisplayName' — Microsoft Graphs
+    # SharePoint-liste-API accepterer stille skriv til et felt kaldet præcis 'DisplayName' (HTTP 200),
+    # men gemmer aldrig værdien (bekræftet ved direkte test). Det er et reserveret feltnavn.
+    @{ name = "TripDisplayName"; expectedType = "text"; definition = @{ name = "TripDisplayName"; text = @{} } }
     @{ name = "StartWeight"; expectedType = "number"; definition = @{ name = "StartWeight"; number = @{ decimalPlaces = "two" } } }
     @{ name = "MaximumWeight"; expectedType = "number"; definition = @{ name = "MaximumWeight"; number = @{ decimalPlaces = "two" } } }
     @{ name = "MaximumEntryWeight"; expectedType = "number"; definition = @{ name = "MaximumEntryWeight"; number = @{ decimalPlaces = "two" } } }
@@ -166,7 +169,7 @@ $existingSystemItems = Invoke-MgGraphRequest -Method GET -Uri "https://graph.mic
 
 if ($existingSystemItems.value.Count -gt 0) {
     Write-Host "`nSystemrækken findes allerede. Det eksisterende globale administratortoken bevares (kan ikke vises igen)." -ForegroundColor Yellow
-    Write-Host "Brug scripts/rotate-client-secret.ps1 / adminfladen til at rotere tokenet, hvis det er mistet." -ForegroundColor Yellow
+    Write-Host "Brug adminfladen (POST /api/admin/global-token/rotate) eller scripts/generate-token.ps1 til at rotere tokenet, hvis det er mistet." -ForegroundColor Yellow
 } else {
     Write-Host "`nOpretter systemrække og genererer det første globale administratortoken..."
     $result = New-HashedToken -Pepper $TokenHashPepper
